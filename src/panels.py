@@ -19,6 +19,8 @@
 # ##### END GPL LICENSE BLOCK #####
 
 import bpy
+import shutil
+import tempfile
 from bpy_extras.io_utils import (
     ImportHelper,
     orientation_helper,
@@ -124,7 +126,7 @@ class SMO_PT_MeshSequenceAdvancedPanel(bpy.types.Panel):
 
 
 class SequenceImportSettings(bpy.types.PropertyGroup):
-    fileNamePrefix: bpy.props.StringProperty(name='File Name')
+    # fileNamePrefix: bpy.props.StringProperty(name='File Name')
 
     # material mode (one material total or one material per frame)
     perFrameMaterial: bpy.props.BoolProperty(
@@ -153,14 +155,14 @@ class SequenceImportSettings(bpy.types.PropertyGroup):
 class ImportSequence(bpy.types.Operator, ImportHelper):
     """Load a mesh sequence"""
     bl_idname = "ms.import_sequence"
-    bl_label = "Select Folder"
+    bl_label = "Select Folder or ZipFile"
     bl_options = {'UNDO'}
 
     importSettings: bpy.props.PointerProperty(type=MeshImporter)
     sequenceSettings: bpy.props.PointerProperty(type=SequenceImportSettings)
 
     # for now, we'll just show any file type that Stop Motion OBJ supports
-    filter_glob: bpy.props.StringProperty(default="*.stl;*.obj;*.mtl;*.ply")
+    filter_glob: bpy.props.StringProperty(default="*.stl;*.obj;*.mtl;*.ply;*.zip")
 
     directory: bpy.props.StringProperty(subtype='DIR_PATH')
 
@@ -168,9 +170,15 @@ class ImportSequence(bpy.types.Operator, ImportHelper):
     axis_up: bpy.props.StringProperty(default="Y")
 
     def execute(self, context):
-        if self.sequenceSettings.fileNamePrefix == "":
-            self.report({'ERROR_INVALID_INPUT'}, "Please enter a file name prefix")
-            return {'CANCELLED'}
+        # if self.sequenceSettings.fileNamePrefix == "":
+        #     self.report({'ERROR_INVALID_INPUT'}, "Please enter a file name prefix")
+        #     return {'CANCELLED'}
+
+        # process zipfile
+        selectedFile = self.properties.filepath
+        if os.path.splitext(selectedFile)[1] == ".zip":
+            self.directory = tempfile.mkdtemp("stop_motion_obj_")
+            shutil.unpack_archive(selectedFile, self.directory)
 
         self.importSettings.axis_forward = self.axis_forward
         self.importSettings.axis_up = self.axis_up
@@ -185,7 +193,7 @@ class ImportSequence(bpy.types.Operator, ImportHelper):
 
         # deep copy self.sequenceSettings data into the new object's mss data, including dirPath
         mss.dirPath = self.directory
-        mss.fileName = self.sequenceSettings.fileNamePrefix
+        # mss.fileName = self.sequenceSettings.fileNamePrefix
         mss.perFrameMaterial = self.sequenceSettings.perFrameMaterial
         mss.cacheMode = self.sequenceSettings.cacheMode
         mss.fileFormat = self.sequenceSettings.fileFormat
@@ -198,14 +206,14 @@ class ImportSequence(bpy.types.Operator, ImportHelper):
         self.copyImportSettings(self.importSettings, mss.fileImporter)
 
         meshCount = 0
-
+        
         # cached
         if mss.cacheMode == 'cached':
-            meshCount = loadSequenceFromMeshFiles(seqObj, mss.dirPath, mss.fileName)
+            meshCount = loadSequenceFromMeshFiles(seqObj, mss.dirPath)
 
         # streaming
         elif mss.cacheMode == 'streaming':
-            meshCount = loadStreamingSequenceFromMeshFiles(seqObj, mss.dirPath, mss.fileName)
+            meshCount = loadStreamingSequenceFromMeshFiles(seqObj, mss.dirPath)
 
         self.resetToDefaults()
 
@@ -235,7 +243,7 @@ class ImportSequence(bpy.types.Operator, ImportHelper):
         dest.stl_use_facet_normal = source.stl_use_facet_normal
     
     def resetToDefaults(self):
-        self.sequenceSettings.fileNamePrefix = ""
+        # self.sequenceSettings.fileNamePrefix = ""
         self.filepath = ""
         self.axis_forward = "-Z"
         self.axis_up = "Y"
@@ -320,10 +328,10 @@ class SMO_PT_SequenceImportSettingsPanel(bpy.types.Panel):
         layout.use_property_decorate = False
         col = layout.column(align=False)
 
-        row = col.row()
-        if op.sequenceSettings.fileNamePrefix == "":
-            row.alert = True
-        row.prop(op.sequenceSettings, "fileNamePrefix")
+        # row = col.row()
+        # if op.sequenceSettings.fileNamePrefix == "":
+        #     row.alert = True
+        # row.prop(op.sequenceSettings, "fileNamePrefix")
         col.prop(op.sequenceSettings, "cacheMode")
         col.prop(op.sequenceSettings, "perFrameMaterial")
         col.prop(op.sequenceSettings, "dirPathIsRelative")

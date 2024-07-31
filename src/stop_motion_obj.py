@@ -149,10 +149,28 @@ def getMeshIdxFromMeshKey(obj, meshKey):
 
     return -1
 
-def countMatchingFiles(_directory, _filePrefix, _fileExtension):
-    full_filepath = os.path.join(_directory, _filePrefix + '*.' + _fileExtension)
-    files = glob.glob(full_filepath)
-    return len(files)
+def getMatchingFiles(_directory, _fileExtension):
+    full_filepath = os.path.join(_directory, '**/*.' + _fileExtension)
+    files = glob.glob(full_filepath, recursive=True)
+    return files
+
+def getExtension(directory):
+    fileExtension = 'obj'
+    files = getMatchingFiles(directory, 'obj')
+    if (len(files) > 0):
+        return fileExtension
+    
+    fileExtension = 'stl'
+    files = getMatchingFiles(directory, 'stl')
+    if (len(files) > 0):
+        return fileExtension
+    
+    fileExtension = 'ply'
+    files = getMatchingFiles(directory, 'ply')
+    if (len(files) > 0):
+        return fileExtension
+    
+    return ''
 
 
 def fileExtensionFromType(_type):
@@ -229,59 +247,51 @@ class MeshImporter(bpy.types.PropertyGroup):
     def draw(self):
         pass
 
-    def load(self, fileType, filePath):
-        if fileType == 'obj':
+    def load(self, filePath):
+        fileType = os.path.splitext(filePath)[1]
+
+        if fileType == '.obj':
             self.loadOBJ(filePath)
-        elif fileType == 'stl':
+        elif fileType == '.stl':
             self.loadSTL(filePath)
-        elif fileType == 'ply':
+        elif fileType == '.ply':
             self.loadPLY(filePath)
 
+    # - to NEGATIVE
+    def fixAxisName(self, axis):
+        new_axis = axis
+        if new_axis == '-X':
+            new_axis = 'NEGATIVE_X'
+        elif new_axis == '-Y':
+            new_axis = 'NEGATIVE_Y'
+        elif new_axis == '-Z':
+            new_axis = 'NEGATIVE_Z'
+        return new_axis
+
+    # import for blender >= 4.0
     def loadOBJ(self, filePath):
         # call the obj load function with all the correct parameters
-        if bpy.app.version >= (2, 92, 0):
-            bpy.ops.import_scene.obj(
-                filepath=filePath,
-                use_edges=self.obj_use_edges,
-                use_smooth_groups=self.obj_use_smooth_groups,
-                use_split_objects=False,
-                use_split_groups=False,
-                use_groups_as_vgroups=self.obj_use_groups_as_vgroups,
-                use_image_search=self.obj_use_image_search,
-                split_mode="OFF",
-                global_clamp_size=self.obj_global_clamp_size,
-                axis_forward=self.axis_forward,
-                axis_up=self.axis_up)
-        else:
-            # Note the parameter called "global_clight_size", which is probably a typo
-            #   It was corrected to "global_clamp_size" in Blender 2.92
-            bpy.ops.import_scene.obj(
-                filepath=filePath,
-                use_edges=self.obj_use_edges,
-                use_smooth_groups=self.obj_use_smooth_groups,
-                use_split_objects=False,
-                use_split_groups=False,
-                use_groups_as_vgroups=self.obj_use_groups_as_vgroups,
-                use_image_search=self.obj_use_image_search,
-                split_mode="OFF",
-                global_clight_size=self.obj_global_clamp_size,
-                axis_forward=self.axis_forward,
-                axis_up=self.axis_up)
+        bpy.ops.wm.obj_import(
+            filepath=filePath,
+            clamp_size=self.obj_global_clamp_size,
+            use_split_objects=False,
+            use_split_groups=False,
+            validate_meshes=False,
+            forward_axis=self.fixAxisName(self.axis_forward),
+            up_axis=self.fixAxisName(self.axis_up))
 
     def loadSTL(self, filePath):
         # call the stl load function with all the correct parameters
-        bpy.ops.import_mesh.stl(
+        bpy.ops.wm.stl_import(
             filepath=filePath,
-            global_scale=self.stl_global_scale,
-            use_scene_unit=self.stl_use_scene_unit,
-            use_facet_normal=self.stl_use_facet_normal,
-            axis_forward=self.axis_forward,
-            axis_up=self.axis_up)
-    
+            use_mesh_validate=False,
+            forward_axis=self.fixAxisName(self.axis_forward),
+            up_axis=self.fixAxisName(self.axis_up))
+        
     def loadPLY(self, filePath):
         # call the ply load function with all the correct parameters
-        bpy.ops.import_mesh.ply(filepath=filePath)
-
+        bpy.ops.wm.ply_import(
+            filepath=filePath)
 
 class MeshNameProp(bpy.types.PropertyGroup):
     key: bpy.props.StringProperty()
@@ -441,19 +451,21 @@ def newMeshSequence():
     return theObj
 
 
-def loadStreamingSequenceFromMeshFiles(obj, directory, filePrefix):
+def loadStreamingSequenceFromMeshFiles(obj, directory):
     # count the number of matching files
     mss = obj.mesh_sequence_settings
     absDirectory = bpy.path.abspath(directory)
-    fileExtension = fileExtensionFromType(mss.fileFormat)
-    if countMatchingFiles(absDirectory, filePrefix, fileExtension) == 0:
-        return 0
+    fileExtension = getExtension(absDirectory)
 
+    # error out early if there are no files that match any file prefix
+    if fileExtension == '':
+        return 0
+    
     # load the first frame
-    wildcardAbsPath = os.path.join(absDirectory, filePrefix + '*.' + fileExtension)
     numFrames = 0
     numFramesInMemory = 0
-    unsortedFilenames = glob.glob(wildcardAbsPath)
+    unsortedFilenames = getMatchingFiles(absDirectory, fileExtension)
+    
     sortedFilenames = sorted(unsortedFilenames, key=alphanumKey)
     deselectAll()
     for filename in sortedFilenames:
@@ -472,17 +484,17 @@ def loadStreamingSequenceFromMeshFiles(obj, directory, filePrefix):
     return numFrames
 
 
-def loadSequenceFromMeshFiles(_obj, _dir, _file):
+def loadSequenceFromMeshFiles(_obj, _dir):
     full_dirpath = bpy.path.abspath(_dir)
-    fileExtension = fileExtensionFromType(_obj.mesh_sequence_settings.fileFormat)
+    fileExtension = getExtension(full_dirpath)
 
-    # error out early if there are no files that match the file prefix
-    if countMatchingFiles(full_dirpath, _file, fileExtension) == 0:
+    # error out early if there are no files that match any file prefix
+    if fileExtension == '':
         return 0
-
-    full_filepath = os.path.join(full_dirpath, _file + '*.' + fileExtension)
+    
+    unsortedFiles = getMatchingFiles(full_dirpath, fileExtension)
     numFrames = 0
-    unsortedFiles = glob.glob(full_filepath)
+    
     sortedFiles = sorted(unsortedFiles, key=alphanumKey)
 
     mss = _obj.mesh_sequence_settings
@@ -490,7 +502,7 @@ def loadSequenceFromMeshFiles(_obj, _dir, _file):
     deselectAll()
     for file in sortedFiles:
         # import the mesh file
-        mss.fileImporter.load(mss.fileFormat, file)
+        mss.fileImporter.load(file)
         tmpObject = bpy.context.selected_objects[0]
 
         # IMPORTANT: don't copy it; just copy the pointer. This cuts memory usage in half.
@@ -567,10 +579,13 @@ def loadSequenceFromBlendFile(_obj):
     mss.loaded = True
 
 
-def reloadSequenceFromMeshFiles(_object, _directory, _filePrefix):
-    # if there are no files that match the file prefix, error out early before making changes
+def reloadSequenceFromMeshFiles(_object, _directory):
     fileExtension = fileExtensionFromType(_object.mesh_sequence_settings.fileFormat)
-    if countMatchingFiles(_directory, _filePrefix, fileExtension) == 0:
+    
+    unsortedFiles = getMatchingFiles(_directory, fileExtension)
+    
+    # error out early if there are no files that match the file prefix
+    if len(unsortedFiles) == 0:
         return 0
 
     meshNamesArray = _object.mesh_sequence_settings.meshNameArray
@@ -592,7 +607,7 @@ def reloadSequenceFromMeshFiles(_object, _directory, _filePrefix):
     originalSpeed = _object.mesh_sequence_settings.speed
     _object.mesh_sequence_settings.speed = 1.0
 
-    numMeshes = loadSequenceFromMeshFiles(_object, _directory, _filePrefix)
+    numMeshes = loadSequenceFromMeshFiles(_object, _directory)
 
     _object.mesh_sequence_settings.numMeshes = numMeshes + 1
     _object.mesh_sequence_settings.numMeshesInMemory = numMeshes
@@ -744,7 +759,7 @@ def importStreamedFile(obj, idx):
     absDirectory = bpy.path.abspath(mss.dirPath)
     filename = os.path.join(absDirectory, mss.meshNameArray[idx].basename)
     deselectAll()
-    mss.fileImporter.load(mss.fileFormat, filename)
+    mss.fileImporter.load(filename)
     tmpObject = getSelectedObjects()[0]
     tmpMesh = tmpObject.data
 
